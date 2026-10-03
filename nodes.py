@@ -4,6 +4,7 @@ import json
 import os
 import urllib.request
 import urllib.error
+from urllib.parse import urlparse
 from io import BytesIO
 import torch
 from PIL import Image
@@ -53,6 +54,27 @@ def parse_json(text):
         raise RuntimeError("Evaluator did not return JSON")
     return json.loads(text[start:end + 1])
 
+def unload_ollama_model(endpoint, model, timeout):
+    """Ask Ollama to unload the evaluator model immediately."""
+    try:
+        parsed = urlparse(endpoint.strip())
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return
+        base = parsed.scheme + "://" + parsed.netloc
+        unload_url = base + "/api/generate"
+        payload = {"model": model, "prompt": "", "keep_alive": 0}
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            unload_url, data=body,
+            headers={"Content-Type": "application/json"}, method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=min(int(timeout), 30)) as response:
+            response.read()
+        print("[Krea2 Evaluator] Ollama model unloaded: " + str(model))
+    except Exception as e:
+        print("[Krea2 Evaluator] WARNING: could not unload Ollama model '" + str(model) + "': " + str(e))
+
+
 def free_cache():
     gc.collect()
     try:
@@ -80,6 +102,7 @@ class Krea2IterationEvaluator:
                 "model": ("STRING", {"default": "gemma3:4b"}),
                 "timeout": ("INT", {"default": 180, "min": 10, "max": 3600, "step": 10}),
                 "free_cuda_cache": ("BOOLEAN", {"default": True}),
+                "unload_ollama": ("BOOLEAN", {"default": True}),
             },
             "optional": {
                 "extra_instruction": ("STRING", {"multiline": True, "default": ""}),
@@ -91,10 +114,41 @@ class Krea2IterationEvaluator:
     FUNCTION = "evaluate"
     CATEGORY = "Krea 2 / Iteration"
 
-    def evaluate(self, image_a, image_b, original_prompt, target, endpoint, model, timeout, free_cuda_cache, extra_instruction=""):
+    def evaluate(self, image_a, image_b, original_prompt, target, endpoint, model, timeout, free_cuda_cache, unload_ollama, extra_instruction=""):
         data_a = image_to_data_url(image_a)
         data_b = image_to_data_url(image_b)
-        system = """You are a strict visual evaluator and prompt refiner for Krea 2 Turbo.\nCompare candidate A and B against TARGET and ORIGINAL PROMPT.\nReturn only JSON with score_a, score_b, selected, a, b, keep, change and improved_prompt.\nScores are 0-10. Preserve what already works. Correct only material problems.\nThe improved_prompt must be one production-ready Krea 2 prompt."""
+        system = """You are a strict visual evaluator and prompt optimizer for Krea 2 Turbo.
+
+You receive ORIGINAL PROMPT, TARGET/REQUIREMENTS, and two candidate images A and B.
+Judge the images primarily by how well they satisfy the ORIGINAL PROMPT and TARGET,
+not merely by which image looks prettier in isolation.
+
+Compare A and B carefully. Identify concrete strengths and weaknesses in each image.
+Select the better candidate. Explain what should be preserved and what should be changed.
+Then write an improved, production-ready Krea 2 prompt for the NEXT iteration.
+Preserve successful elements from the selected candidate and change only material problems.
+Do not invent requirements that are absent from the ORIGINAL PROMPT or TARGET.
+
+IMPORTANT OUTPUT RULE:
+Return ONLY one valid JSON object.
+Do NOT use Markdown fences.
+Do NOT write an explanation before or after the JSON.
+
+Required JSON schema:
+{
+  "score_a": 0.0,
+  "score_b": 0.0,
+  "selected": "A",
+  "a": "concrete strengths/weaknesses of A",
+  "b": "concrete strengths/weaknesses of B",
+  "keep": "what should be preserved",
+  "change": "specific changes for the next iteration",
+  "improved_prompt": "complete production-ready Krea 2 prompt"
+}
+
+score_a and score_b must be numbers from 0 to 10.
+selected must be exactly A or B.
+All JSON values must be valid JSON strings/numbers."""
         user = "TARGET:\n" + (target or "(none)") + "\n\nORIGINAL PROMPT:\n" + (original_prompt or "(none)") + "\n\nEXTRA:\n" + (extra_instruction or "(none)")
         payload = {
             "model": model,
@@ -110,8 +164,16 @@ class Krea2IterationEvaluator:
                 ]}
             ],
         }
-        response = post_json(endpoint.strip(), payload, int(timeout))
-        result = parse_json(response_text(response))
+        response = None
+        try:
+            response = post_json(endpoint.strip(), payload, int(timeout))
+            raw_response = response_text(response)
+            print("[Krea2 Evaluator] Raw Ollama response:")
+            print(raw_response)
+            result = parse_json(raw_response)
+        finally:
+            if unload_ollama:
+                unload_ollama_model(endpoint, model, int(timeout))
         score_a = max(0.0, min(10.0, float(result.get("score_a", 0.0))))
         score_b = max(0.0, min(10.0, float(result.get("score_b", 0.0))))
         improved = str(result.get("improved_prompt", "")).strip()
