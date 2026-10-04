@@ -109,8 +109,8 @@ class Krea2IterationEvaluator:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "FLOAT", "FLOAT", "STRING")
-    RETURN_NAMES = ("improved_prompt", "evaluation_json", "score_a", "score_b", "selected")
+    RETURN_TYPES = ("STRING", "STRING", "FLOAT", "FLOAT", "STRING", "STRING")
+    RETURN_NAMES = ("improved_prompt", "evaluation_json", "score_a", "score_b", "selected", "comparison_pl")
     FUNCTION = "evaluate"
     CATEGORY = "Krea 2 / Iteration"
 
@@ -143,7 +143,8 @@ Required JSON schema:
   "b": "concrete strengths/weaknesses of B",
   "keep": "what should be preserved",
   "change": "specific changes for the next iteration",
-  "improved_prompt": "complete production-ready Krea 2 prompt"
+  "improved_prompt": "complete production-ready Krea 2 prompt",
+  "comparison_pl": "krótkie porównanie po polsku"
 }
 
 score_a and score_b must be numbers from 0 to 10.
@@ -182,11 +183,15 @@ All JSON values must be valid JSON strings/numbers."""
         selected = str(result.get("selected", "MIX")).upper()
         if selected not in ("A", "B", "MIX"):
             selected = "MIX"
+        comparison_pl = str(result.get("comparison_pl", "")).strip()
+        if not comparison_pl:
+            comparison_pl = "Lepszy kandydat: " + selected + ". A: " + f"{score_a:.1f}" + "/10, B: " + f"{score_b:.1f}" + "/10. Zmiany: " + str(result.get("change", "brak danych"))
+
         evaluation = json.dumps(result, ensure_ascii=False, indent=2)
         if free_cuda_cache:
             del data_a, data_b, response
             free_cache()
-        return improved, evaluation, score_a, score_b, selected
+        return improved, evaluation, score_a, score_b, selected, comparison_pl
 
 NODE_CLASS_MAPPINGS = {"Krea2IterationEvaluator": Krea2IterationEvaluator}
 NODE_DISPLAY_NAME_MAPPINGS = {"Krea2IterationEvaluator": "Krea 2 Iteration Evaluator (2 Images)"}
