@@ -129,6 +129,8 @@ Then write an improved, production-ready Krea 2 prompt for the NEXT iteration.
 Preserve successful elements from the selected candidate and change only material problems.
 Do not invent requirements that are absent from the ORIGINAL PROMPT or TARGET.
 
+comparison_pl must be a concise, natural Polish-language comparison for the user: which image is better, why, and what should change next.
+
 IMPORTANT OUTPUT RULE:
 Return ONLY one valid JSON object.
 Do NOT use Markdown fences.
