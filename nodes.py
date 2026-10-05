@@ -129,7 +129,16 @@ Then write an improved, production-ready Krea 2 prompt for the NEXT iteration.
 Preserve successful elements from the selected candidate and change only material problems.
 Do not invent requirements that are absent from the ORIGINAL PROMPT or TARGET.
 
-comparison_pl must be a concise, natural Polish-language comparison for the user: which image is better, why, and what should change next.
+IMPORTANT LANGUAGE RULE:
+All descriptive text fields MUST be written in Polish:
+- a
+- b
+- keep
+- change
+- comparison_pl
+The improved_prompt should remain in the language that is most effective for Krea 2 and should preserve the language of the ORIGINAL PROMPT when practical.
+
+comparison_pl must be a detailed Polish report, not a one-line summary. It must explain the result and the next iteration clearly.
 
 IMPORTANT OUTPUT RULE:
 Return ONLY one valid JSON object.
@@ -141,12 +150,12 @@ Required JSON schema:
   "score_a": 0.0,
   "score_b": 0.0,
   "selected": "A",
-  "a": "concrete strengths/weaknesses of A",
-  "b": "concrete strengths/weaknesses of B",
-  "keep": "what should be preserved",
-  "change": "specific changes for the next iteration",
+  "a": "szczegółowa analiza obrazu A po polsku: zgodność z promptem, kompozycja, anatomia, światło, materiały, szczegóły, artefakty i konkretne mocne/słabe strony",
+  "b": "szczegółowa analiza obrazu B po polsku: zgodność z promptem, kompozycja, anatomia, światło, materiały, szczegóły, artefakty i konkretne mocne/słabe strony",
+  "keep": "szczegółowo po polsku: co zachować z najlepszego wyniku i dlaczego",
+  "change": "szczegółowo po polsku: co konkretnie zmienić w następnej iteracji i jaki problem każda zmiana ma rozwiązać",
   "improved_prompt": "complete production-ready Krea 2 prompt",
-  "comparison_pl": "krótkie porównanie po polsku"
+  "comparison_pl": "pełny raport po polsku w formacie: PORÓWNANIE KANDYDATÓW / LEPSZY OBRAZ / WYNIK A / WYNIK B / ANALIZA A / ANALIZA B / CO ZACHOWAĆ / CO ZMIENIĆ / PROMPT NASTĘPNEJ ITERACJI"
 }
 
 score_a and score_b must be numbers from 0 to 10.
@@ -185,10 +194,37 @@ All JSON values must be valid JSON strings/numbers."""
         selected = str(result.get("selected", "MIX")).upper()
         if selected not in ("A", "B", "MIX"):
             selected = "MIX"
-        comparison_pl = str(result.get("comparison_pl", "")).strip()
-        if not comparison_pl:
-            comparison_pl = "Lepszy kandydat: " + selected + ". A: " + f"{score_a:.1f}" + "/10, B: " + f"{score_b:.1f}" + "/10. Zmiany: " + str(result.get("change", "brak danych"))
+        # Build a detailed Polish report from the SAME structured evaluation.
+        # This keeps comparison_pl consistent with evaluation_json instead of making
+        # it a separate, lossy one-line summary.
+        a_text = str(result.get("a", "Brak szczegółowej analizy obrazu A.")).strip()
+        b_text = str(result.get("b", "Brak szczegółowej analizy obrazu B.")).strip()
+        keep_text = str(result.get("keep", "Brak danych dotyczących elementów do zachowania.")).strip()
+        change_text = str(result.get("change", "Brak danych dotyczących zmian.")).strip()
+        model_comparison = str(result.get("comparison_pl", "")).strip()
+        comparison_pl = (
+            "PORÓWNANIE KANDYDATÓW\n\n"
+            "LEPSZY OBRAZ: " + selected + "\n"
+            "WYNIK A: " + f"{score_a:.1f}" + "/10\n"
+            "WYNIK B: " + f"{score_b:.1f}" + "/10\n\n"
+            "ANALIZA A:\n" + a_text + "\n\n"
+            "ANALIZA B:\n" + b_text + "\n\n"
+            "CO ZACHOWAĆ:\n" + keep_text + "\n\n"
+            "CO ZMIENIĆ:\n" + change_text + "\n\n"
+            "PROMPT NASTĘPNEJ ITERACJI:\n" + improved
+        )
+        if model_comparison and len(model_comparison) > 80:
+            # Preserve a rich model-written Polish report when it actually contains
+            # useful detail, but still ensure the output is never a terse one-liner.
+            comparison_pl = model_comparison + "\n\n" + (
+                "WNIOSKI TECHNICZNE:\n"
+                "Do kolejnej iteracji należy zachować elementy wskazane w sekcji "
+                "'CO ZACHOWAĆ' i zastosować wyłącznie istotne poprawki z sekcji "
+                "'CO ZMIENIĆ'."
+            )
 
+        # Ensure the machine-readable JSON contains the same detailed Polish report.
+        result["comparison_pl"] = comparison_pl
         evaluation = json.dumps(result, ensure_ascii=False, indent=2)
         if free_cuda_cache:
             del data_a, data_b, response
