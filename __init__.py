@@ -1,14 +1,3 @@
-from .my_custom_node import MyCustomNode
+from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 
-# Mapowanie: "NazwaKlasyWSystemie": KlasaPython
-NODE_CLASS_MAPPINGS = {
-    "MyCustomNode": MyCustomNode
-}
-
-# Mapowanie przyjaznych nazw wyświetlanych użytkownikowi w UI
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "MyCustomNode": "🌟 Mój Własny Custom Node"
-}
-
-# Eksport mapowań
-__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
