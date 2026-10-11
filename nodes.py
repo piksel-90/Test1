@@ -35,12 +35,71 @@ def post_json(url, payload, timeout):
         raise RuntimeError("Cannot reach evaluator: " + str(e))
 
 def response_text(response):
-    try:
-        return response["choices"][0]["message"]["content"]
-    except Exception as e:
-        raise RuntimeError("Evaluator response is not OpenAI-compatible") from e
+    """Read text from OpenAI-compatible or Ollama-native responses."""
+    if not isinstance(response, dict):
+        raise RuntimeError("Evaluator returned a non-object response")
+    if "choices" in response:
+        choices = response.get("choices") or []
+        if not choices:
+            raise RuntimeError("Evaluator response has no choices")
+        message = choices[0].get("message") or {}
+        content = message.get("content") or ""
+        if isinstance(content, list):
+            content = "\n".join(
+                part.get("text", "") for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        if not isinstance(content, str):
+            raise RuntimeError("Evaluator returned unsupported content type")
+        if not content.strip():
+            print("[Krea2 Evaluator] Empty OpenAI content; finish_reason="
+                  + repr(choices[0].get("finish_reason"))
+                  + ", thinking_chars=" + str(len(message.get("thinking") or ""))
+                  + ", usage=" + repr(response.get("usage")))
+        return content
+    if "message" in response:
+        message = response.get("message") or {}
+        content = message.get("content") or ""
+        if not isinstance(content, str):
+            raise RuntimeError("Ollama returned unsupported content type")
+        if not content.strip():
+            print("[Krea2 Evaluator] Empty Ollama content; done_reason="
+                  + repr(response.get("done_reason"))
+                  + ", thinking_chars=" + str(len(message.get("thinking") or ""))
+                  + ", eval_count=" + repr(response.get("eval_count")))
+        return content
+    raise RuntimeError("Evaluator response has neither choices nor message")
+
+
+def ollama_native_endpoint(endpoint):
+    """Recognize Ollama's OpenAI-compatible route, including remote hosts."""
+    parsed = urlparse(endpoint.strip())
+    if (parsed.scheme in ("http", "https")
+            and parsed.netloc
+            and parsed.path.rstrip("/") == "/v1/chat/completions"):
+        return parsed.scheme + "://" + parsed.netloc + "/api/chat"
+    return None
+
+
+def ollama_native_payload(model, system, user, data_a, data_b):
+    """Ollama's native vision API expects raw base64 strings, not data URLs."""
+    return {
+        "model": model,
+        "stream": False,
+        "format": "json",
+        "think": False,
+        "options": {"temperature": 0.2, "num_predict": 4096},
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user",
+             "content": user + "\n\nCompare the two attached images in order: first A, then B. Return the JSON evaluation.",
+             "images": [data_a.split(",", 1)[1], data_b.split(",", 1)[1]]},
+        ],
+    }
 
 def parse_json(text):
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError("Evaluator returned empty content instead of JSON")
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
@@ -180,9 +239,34 @@ All JSON values must be valid JSON strings/numbers."""
         try:
             response = post_json(endpoint.strip(), payload, int(timeout))
             raw_response = response_text(response)
-            print("[Krea2 Evaluator] Raw Ollama response:")
-            print(raw_response)
-            result = parse_json(raw_response)
+            try:
+                result = parse_json(raw_response)
+            except (RuntimeError, ValueError, TypeError) as first_error:
+                native_url = ollama_native_endpoint(endpoint)
+                if not native_url:
+                    raise RuntimeError(
+                        "Evaluator returned invalid JSON: " + str(first_error)
+                        + "; response excerpt: " + repr(str(raw_response)[:600])
+                    ) from first_error
+                print("[Krea2 Evaluator] OpenAI-compatible response not usable: "
+                      + str(first_error))
+                print("[Krea2 Evaluator] Retrying via Ollama /api/chat "
+                      "with think=false and format=json")
+                native_payload = ollama_native_payload(
+                    model, system, user, data_a, data_b
+                )
+                try:
+                    response = post_json(native_url, native_payload, int(timeout))
+                    raw_response = response_text(response)
+                    result = parse_json(raw_response)
+                except (RuntimeError, ValueError, TypeError) as retry_error:
+                    raise RuntimeError(
+                        "Evaluator failed after Ollama native retry. "
+                        "Initial response: " + str(first_error)
+                        + "; retry error: " + str(retry_error)
+                        + "; response excerpt: " + repr(str(raw_response)[:600])
+                    ) from retry_error
+            print("[Krea2 Evaluator] Parsed evaluation JSON successfully.")
         finally:
             if unload_ollama:
                 unload_ollama_model(endpoint, model, int(timeout))
